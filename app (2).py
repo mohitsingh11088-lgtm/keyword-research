@@ -1,39 +1,32 @@
 import streamlit as st
 import requests
-import time
 import pandas as pd
+import time
 
-st.set_page_config(page_title="Apify GMB Scraper", layout="wide")
+st.set_page_config(page_title="GMB Lead Finder", layout="wide")
 
 st.title("📍 GMB Lead Finder (Apify Powered)")
-
-st.write("Scrape Google Maps and find businesses WITHOUT websites")
+st.write("Find Google Maps businesses WITHOUT websites")
 
 # -----------------------------
 # INPUTS
 # -----------------------------
-API_TOKEN = st.text_input("🔑 Apify API Token", type="password")
+API_TOKEN = st.text_input("Apify API Token", type="password")
 
-actor_id = st.text_input(
-    "🤖 Apify Actor ID",
-    value="compass/crawler-google-places"
-)
+actor_id = st.text_input("Actor ID", value="GKjtRGvi01lg33ayo")
 
-keyword = st.text_input("🔍 Keyword (e.g. dentist, salon, gym)")
-location = st.text_input("📍 Location (e.g. Mumbai, Delhi, USA)")
+keyword = st.text_input("Keyword (e.g. dentist, salon, restaurant)")
+location = st.text_input("Location (e.g. Mumbai, Delhi, USA)")
+
 max_results = st.slider("Max results", 10, 200, 50)
 
 # -----------------------------
 # RUN BUTTON
 # -----------------------------
-if st.button("🚀 Start Scraping"):
+if st.button("🚀 Run Scraper"):
 
     if not API_TOKEN:
         st.error("Please enter API token")
-        st.stop()
-
-    if not actor_id:
-        st.error("Please enter Actor ID")
         st.stop()
 
     if not keyword or not location:
@@ -52,19 +45,17 @@ if st.button("🚀 Start Scraping"):
     }
 
     with st.spinner("Starting Apify Actor..."):
-
         response = requests.post(url, json=payload)
-        run_data = response.json()
+        data = response.json()
 
-        # Debug (important for you)
-        st.write("Raw response:", run_data)
+        st.write("Raw response:", data)
 
-        if "data" not in run_data:
-            st.error("Failed to start Actor. Check Actor ID or API token.")
+        if "data" not in data:
+            st.error("Failed to start actor. Check Actor ID or input format.")
             st.stop()
 
-        run_id = run_data["data"]["id"]
-        dataset_id = run_data["data"]["defaultDatasetId"]
+        run_id = data["data"]["id"]
+        dataset_id = data["data"]["defaultDatasetId"]
 
     st.success(f"Actor started! Run ID: {run_id}")
 
@@ -96,31 +87,47 @@ if st.button("🚀 Start Scraping"):
 
     results = requests.get(dataset_url).json()
 
+    st.write("Sample result:", results[0])  # DEBUG (optional)
+
     # -----------------------------
     # STEP 4: FILTER NO WEBSITE
     # -----------------------------
     leads = []
 
     for item in results:
-        if not item.get("website"):
+
+        website = item.get("url")  # IMPORTANT: your field name
+
+        if not website:  # NO WEBSITE FILTER
+            address = ", ".join(filter(None, [
+                item.get("street"),
+                item.get("city"),
+                item.get("country")
+            ]))
+
             leads.append({
-                "Name": item.get("title"),
-                "Address": item.get("address"),
-                "Phone": item.get("phone"),
-                "Rating": item.get("totalScore"),
-                "Category": item.get("categoryName")
+                "Name": item.get("name"),
+                "Address": address,
+                "Phone": item.get("phone_number"),
+                "Website": "❌ No website",
+                "Email": item.get("emails"),
+                "Category": item.get("business_category"),
+                "Google Maps": item.get("google_maps_url")
             })
 
+    # -----------------------------
+    # STEP 5: SHOW RESULTS
+    # -----------------------------
     st.success(f"Found {len(leads)} businesses WITHOUT websites")
 
-    # -----------------------------
-    # STEP 5: SHOW DATA
-    # -----------------------------
     if leads:
         df = pd.DataFrame(leads)
+
         st.dataframe(df)
 
+        # CSV download
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download CSV", csv, "gmb_leads.csv", "text/csv")
+
     else:
         st.warning("No leads found without websites")
