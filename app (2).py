@@ -1,86 +1,126 @@
 import streamlit as st
 import requests
+import time
 import pandas as pd
 
-st.set_page_config(page_title="GMB Lead Finder", layout="wide")
+st.set_page_config(page_title="Apify GMB Scraper", layout="wide")
 
-st.title("📍 Google Maps Lead Finder (Apify Powered)")
-st.write("Find businesses and filter those WITHOUT websites")
+st.title("📍 GMB Lead Finder (Apify Powered)")
+
+st.write("Scrape Google Maps and find businesses WITHOUT websites")
 
 # -----------------------------
 # INPUTS
 # -----------------------------
-API_TOKEN = st.text_input("Apify API Token", type="password")
+API_TOKEN = st.text_input("🔑 Apify API Token", type="password")
 
-keyword = st.text_input("Search keyword (e.g. dentist, salon, gym)")
-location = st.text_input("Location (e.g. Mumbai, Delhi, New York)")
-max_results = st.slider("Max results per search", 10, 200, 50)
+actor_id = st.text_input(
+    "🤖 Apify Actor ID",
+    value="compass/crawler-google-places"
+)
 
-# -----------------------------
-# ACTOR CONFIG
-# -----------------------------
-# Use REAL actor id from Apify store
-actor_id = "compass/crawler-google-places"
+keyword = st.text_input("🔍 Keyword (e.g. dentist, salon, gym)")
+location = st.text_input("📍 Location (e.g. Mumbai, Delhi, USA)")
+max_results = st.slider("Max results", 10, 200, 50)
 
 # -----------------------------
 # RUN BUTTON
 # -----------------------------
-if st.button("Find GMB Leads"):
+if st.button("🚀 Start Scraping"):
 
-    if not API_TOKEN or not keyword or not location:
-        st.warning("Please fill all required fields")
+    if not API_TOKEN:
+        st.error("Please enter API token")
         st.stop()
 
-    with st.spinner("Running Apify scraper..."):
+    if not actor_id:
+        st.error("Please enter Actor ID")
+        st.stop()
 
-        url = f"https://api.apify.com/v2/acts/{actor_id}/runs?token={API_TOKEN}"
+    if not keyword or not location:
+        st.error("Please enter keyword and location")
+        st.stop()
 
-        payload = {
-            "searchStringsArray": [keyword],
-            "locationQueries": [location],
-            "maxCrawledPlacesPerSearch": max_results,
-            "extractContactsFromWebsite": True
-        }
+    # -----------------------------
+    # STEP 1: RUN ACTOR
+    # -----------------------------
+    url = f"https://api.apify.com/v2/acts/{actor_id}/runs?token={API_TOKEN}"
 
-        # 1. Start Actor
+    payload = {
+        "searchStringsArray": [keyword],
+        "locationQueries": [location],
+        "maxCrawledPlacesPerSearch": max_results
+    }
+
+    with st.spinner("Starting Apify Actor..."):
+
         response = requests.post(url, json=payload)
-        data = response.json()
+        run_data = response.json()
 
-        run_id = data["data"]["id"]
-        dataset_id = data["data"]["defaultDatasetId"]
+        # Debug (important for you)
+        st.write("Raw response:", run_data)
 
-        st.success("Scraping started... fetching results")
+        if "data" not in run_data:
+            st.error("Failed to start Actor. Check Actor ID or API token.")
+            st.stop()
 
-        # 2. Wait & fetch dataset
-        dataset_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?clean=true&token={API_TOKEN}"
+        run_id = run_data["data"]["id"]
+        dataset_id = run_data["data"]["defaultDatasetId"]
 
-        results = requests.get(dataset_url).json()
+    st.success(f"Actor started! Run ID: {run_id}")
 
-        # -----------------------------
-        # FILTER: NO WEBSITE BUSINESSES
-        # -----------------------------
-        leads = []
-        for item in results:
-            if not item.get("website"):
-                leads.append({
-                    "Name": item.get("title"),
-                    "Address": item.get("address"),
-                    "Phone": item.get("phone"),
-                    "Rating": item.get("totalScore"),
-                    "Category": item.get("categoryName")
-                })
+    # -----------------------------
+    # STEP 2: WAIT FOR COMPLETION
+    # -----------------------------
+    status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={API_TOKEN}"
 
-        st.success(f"Found {len(leads)} businesses WITHOUT websites")
+    with st.spinner("Waiting for scraping to finish..."):
 
-        # -----------------------------
-        # SHOW RESULTS
-        # -----------------------------
-        if leads:
-            df = pd.DataFrame(leads)
-            st.dataframe(df)
+        while True:
+            status_res = requests.get(status_url).json()
+            status = status_res["data"]["status"]
 
-            # Download CSV
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download CSV", csv, "gmb_leads.csv", "text/csv")
-        else:
-            st.warning("No results found without websites")
+            if status == "SUCCEEDED":
+                break
+            elif status in ["FAILED", "ABORTED", "TIMED-OUT"]:
+                st.error(f"Run failed: {status}")
+                st.stop()
+
+            time.sleep(3)
+
+    st.success("Scraping completed!")
+
+    # -----------------------------
+    # STEP 3: GET RESULTS
+    # -----------------------------
+    dataset_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?clean=true&token={API_TOKEN}"
+
+    results = requests.get(dataset_url).json()
+
+    # -----------------------------
+    # STEP 4: FILTER NO WEBSITE
+    # -----------------------------
+    leads = []
+
+    for item in results:
+        if not item.get("website"):
+            leads.append({
+                "Name": item.get("title"),
+                "Address": item.get("address"),
+                "Phone": item.get("phone"),
+                "Rating": item.get("totalScore"),
+                "Category": item.get("categoryName")
+            })
+
+    st.success(f"Found {len(leads)} businesses WITHOUT websites")
+
+    # -----------------------------
+    # STEP 5: SHOW DATA
+    # -----------------------------
+    if leads:
+        df = pd.DataFrame(leads)
+        st.dataframe(df)
+
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download CSV", csv, "gmb_leads.csv", "text/csv")
+    else:
+        st.warning("No leads found without websites")
